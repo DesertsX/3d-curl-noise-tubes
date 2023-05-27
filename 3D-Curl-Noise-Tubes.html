@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <!-- <link rel="icon" type="image/svg+xml" href="favicon.svg" /> -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite App</title>
+    <style>
+        body {
+            margin: 0;
+        }
+
+        #ar-button {
+            position: fixed;
+            z-index: 1001;
+            padding: 1vh;
+            bottom: 1vh;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+    </style>
+</head>
+
+<body>
+    <button id="ar-button">进入 AR</button>
+    <script src="colors1000.js"></script>
+    <!-- https://github.com/josephg/noisejs -->
+    <script src="./perlin.js"></script>
+
+    <script type="module">
+        // import * as THREE from './libs/three.js-r132/build/three.module.js'
+        import * as THREE from './three.module.js'
+
+        // import * as THREE from 'https://unpkg.com/browse/three@0.132.2/build/three.module.js'
+        // console.log(THREE)
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const initialize = async () => {
+                const arButton = document.querySelector('#ar-button')
+
+                // 确保浏览器支持 WebXR
+                const supported = navigator.xr && await navigator.xr.isSessionSupported('immersive-ar')
+                if (!supported) {
+                    arButton.textContent = 'Not Supported'
+                    arButton.disabled = true
+                    return;
+                }
+
+                const palette = colors[Math.floor(Math.random() * colors.length)]
+                // console.log(palette)
+                // const bgColor = palette.pop();
+
+                const w = window.innerWidth
+                const h = window.innerHeight
+
+                const scene = new THREE.Scene()
+                const camera = new THREE.PerspectiveCamera(75, w / h, 0.001, 2000)
+                // camera.position.set(2, 2, -2);
+                camera.position.set(0, 0, 2);
+
+                const renderer = new THREE.WebGLRenderer({ alpha: true })
+                renderer.setSize(w, h)
+                renderer.setPixelRatio(window.devicePixelRatio)
+                // renderer.setClearColor(0xeeeeee, 1);
+                // renderer.setClearColor(bgColor, 1);
+                document.body.appendChild(renderer.domElement)
+
+                const vertex = /* GLSL */ `
+                    uniform float uTime;
+
+                    varying vec2 vUv;
+                    varying vec3 vPosition;
+
+                    float PI = 3.141592653589793238;
+                    // const float PI = 3.141592653589793238;
+
+                    void main() {
+                        vUv = uv;
+                        vPosition = position;
+
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                    `
+
+                const fragment = /* GLSL */ `
+                    uniform float uTime;
+                    // uniform vec4 resolution;
+                    uniform vec3 uColor;
+                    uniform float uSpeed;
+
+                    varying vec2 vUv;
+                    varying vec3 vPosition;
+
+                    float PI = 3.141592653589793238;
+                    // const float PI = 3.141592653589793238;
+
+                    void main() {
+                        // vec2 newUV = (vUv - vec2(0.5)) * resolution.zw + vec2(0.5);
+                        float dash = sin(vUv.x * 50.0 + uTime / 2.0);
+                        if(dash < 0.99) discard;
+
+                        gl_FragColor = vec4(vUv, 0.0, 1.0);
+                        gl_FragColor = vec4(uColor, 1.0);
+                    }
+                    `
+
+                // WebXR 里 1 unit length = 现实中 1 米
+                // const size = 0.05 // 0.06
+                // const geometry = new THREE.BoxGeometry(size, size, size)
+
+                const material = new THREE.ShaderMaterial({
+                    extensions: {
+                        derivatives: "#extension GL_OES_standard_derivatives : enable",
+                    },
+                    side: THREE.DoubleSide,
+                    uniforms: {
+                        uTime: { value: 0 },
+                        uSpeed: { value: 0 },
+                        uColor: { value: new THREE.Color(0xff0000) },
+                        // resolution: { value: new THREE.Vector4() },
+                    },
+                    vertexShader: vertex,
+                    fragmentShader: fragment,
+                });
+
+                const materials = [];
+                const scale = 1;
+                for (let i = 0; i < 600; i++) {
+                    const path = new THREE.CatmullRomCurve3(
+                        // this.getCurve(new THREE.Vector3(i / 1000 - 0.5, 0, 0))
+                        getCurve(
+                            new THREE.Vector3(
+                                scale * (Math.random() - 0.5),
+                                scale * (Math.random() - 0.5),
+                                scale * (Math.random() - 0.5)
+                            )
+                        )
+                    );
+                    // tube分段数多些 600 和 points 一致；tube radius 0.005 屏幕也就1左右，这里细些
+                    const geometry = new THREE.TubeGeometry(path, 600, 0.003, 16, false);
+                    const material1 = material.clone();
+                    material1.uniforms.uColor.value = new THREE.Color(
+                        palette[Math.floor(Math.random() * palette.length)]
+                    );
+                    // Math.random() * 10 + 5
+                    material1.uniforms.uSpeed.value = Math.random();
+                    materials.push(material1);
+
+                    const curve = new THREE.Mesh(geometry, material1);
+                    scene.add(curve);
+
+
+                    const mesh = new THREE.Mesh(geometry, material)
+                    scene.add(mesh);
+                }
+
+                function getCurve(start) {
+                    const scale = 5;
+                    const points = [start];
+                    let currentPoint = start.clone();
+                    for (let i = 0; i < 600; i++) {
+                        // 根据计算的速度没次移动一点点
+                        let v = computeCurl(
+                            currentPoint.x / scale,
+                            currentPoint.y / scale,
+                            currentPoint.z / scale
+                        );
+                        // 加上缩小后的 curl noise 值
+                        currentPoint.addScaledVector(v, 0.01);
+                        // console.log(currentPoint.clone(), v);
+                        points.push(currentPoint.clone());
+                    }
+                    return points;
+                }
+
+                function computeCurl(x, y, z) {
+                    var eps = 1e-4;
+
+                    //Find rate of change in X
+                    var n1 = noise.simplex3(x + eps, y, z);
+                    var n2 = noise.simplex3(x - eps, y, z);
+                    //Average to find approximate derivative
+                    var a = (n1 - n2) / (2 * eps);
+
+                    //Find rate of change in Y
+                    n1 = noise.simplex3(x, y + eps, z);
+                    n2 = noise.simplex3(x, y - eps, z);
+                    //Average to find approximate derivative
+                    var b = (n1 - n2) / (2 * eps);
+
+                    //Find rate of change in Z
+                    n1 = noise.simplex3(x, y, z + eps);
+                    n2 = noise.simplex3(x, y, z - eps);
+                    //Average to find approximate derivative
+                    var c = (n1 - n2) / (2 * eps);
+
+                    var noiseGrad0 = [a, b, c];
+
+                    // Offset position for second noise read
+                    x += 10000.5;
+                    y += 10000.5;
+                    z += 10000.5;
+
+                    //Find rate of change in X
+                    n1 = noise.simplex3(x + eps, y, z);
+                    n2 = noise.simplex3(x - eps, y, z);
+                    //Average to find approximate derivative
+                    a = (n1 - n2) / (2 * eps);
+
+                    //Find rate of change in Y
+                    n1 = noise.simplex3(x, y + eps, z);
+                    n2 = noise.simplex3(x, y - eps, z);
+                    //Average to find approximate derivative
+                    b = (n1 - n2) / (2 * eps);
+
+                    //Find rate of change in Z
+                    n1 = noise.simplex3(x, y, z + eps);
+                    n2 = noise.simplex3(x, y, z - eps);
+                    //Average to find approximate derivative
+                    c = (n1 - n2) / (2 * eps);
+
+                    var noiseGrad1 = [a, b, c];
+
+                    // noiseGrad0 = normalize(noiseGrad0);
+                    // noiseGrad1 = normalize(noiseGrad1);
+                    // var curl = cross(noiseGrad0, noiseGrad1);
+                    // return normalize(curl);
+                    // console.log(noiseGrad0, noiseGrad1);
+                    noiseGrad0 = new THREE.Vector3(...noiseGrad0).normalize();
+                    noiseGrad1 = new THREE.Vector3(...noiseGrad1).normalize();
+                    // console.log(noiseGrad0, noiseGrad1);
+                    var curl = noiseGrad0.cross(noiseGrad1);
+                    return curl.normalize();
+                }
+
+                // const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1)
+                // scene.add(light)
+
+                // WebXR 需要用户交互才能开启，通过 button click 触发 start
+                let currentSession = null
+                const start = async () => {
+                    // currentSession = await navigator.xr.requestSession('immersive-ar')
+                    // 默认开始 webxr 时所有 html 元素都会消失，想现实在 ar 里需要设置下
+                    currentSession = await navigator.xr.requestSession('immersive-ar', {
+                        optionalFeatures: ['dom-overlay'], domOverlay: { root: document.body }
+                    })
+
+                    // three.js 现在有内置 support webxr，需要通过 renderer.xr => Web XR manager 来工作
+                    renderer.xr.enabled = true
+
+                    // XR manager 会帮忙持续不断更新场景、相机的位置，然后渲染的物体能出现在锚定的物理世界里，作为开发人员只需要关注自己的 scene 就行
+                    // 当前物理世界的位置作为 AR 里虚拟世界的中心位置，还可以是 local floor 当前地面作为虚拟世界中心，不过可能这俩在 VR 里都有意义，在 AR 里只需 local 即可
+                    renderer.xr.setReferenceSpaceType('local')
+                    // three.js 没有 tracking 能力 需要 xr
+                    await renderer.xr.setSession(currentSession)
+
+                    arButton.textContent = 'End'
+
+                    let time = 0
+                    renderer.setAnimationLoop(() => {
+                        renderer.render(scene, camera)
+                        time += 0.05
+                        // material.uniforms.uTime.value = time
+                        materials.forEach((m) => (m.uniforms.uTime.value = time));
+                    })
+                }
+
+                const end = async () => {
+                    currentSession.end()
+                    renderer.clear()
+                    renderer.setAnimationLoop(null)
+
+                    arButton.style.display = 'none'
+                }
+
+                arButton.addEventListener('click', () => {
+                    if (currentSession) {
+                        end()
+                    } else {
+                        start()
+                    }
+                })
+            }
+
+            initialize()
+        })
+    </script>
+</body>
+
+</html>
